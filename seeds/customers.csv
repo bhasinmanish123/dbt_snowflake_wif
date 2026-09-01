@@ -1,0 +1,6 @@
+id,first_name,last_name,email,city
+1,John,Smith,john.smith@example.com,Sydney
+2,Jane,Doe,jane.doe@example.com,Melbourne
+3,Bob,Jones,bob.jones@example.com,Brisbane
+4,Alice,Brown,alice.brown@example.com,Perth
+5,Charlie,Wilson,charlie.wilson@example.com,Adelaide
