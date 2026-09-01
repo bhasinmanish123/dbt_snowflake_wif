@@ -17,3 +17,4 @@ from {{ ref('customers') }}
 -- wif fix
 -- test ci dev prod
 -- test composite action setup-snowflake
+-- test 2 manifest cache
