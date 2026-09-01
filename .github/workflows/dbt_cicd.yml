@@ -1,25 +1,5 @@
 # ============================================================
 # dbt CI/CD — Single Repo (WIF OIDC)
-#
-# FLOW:
-#   PR to main:
-#     1. Lint (YAML + SQL)
-#     2. setup-snowflake → WIF token
-#     3. Restore manifest cache → partial parsing
-#     4. dbt build --target ci → DEV_<github_username>
-#     5. Save manifest cache
-#
-#   Merge to main:
-#     1. setup-snowflake → WIF token
-#     2. Restore manifest cache → partial parsing
-#     3. dbt build --target prod → PROD
-#     4. Save manifest cache
-#
-# SECRETS NEEDED (1 only):
-#   SNOWFLAKE_ACCOUNT = ixxaxho-kv48866
-#
-# GITHUB ENVIRONMENT NEEDED:
-#   prod  (Settings → Environments → New: prod)
 # ============================================================
 name: dbt CI/CD (WIF)
 
@@ -34,10 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  # ============================================================
-  # CI: on Pull Request — lint + build personal DEV schema
-  # ============================================================
-
   lint:
     if: github.event_name == 'pull_request'
     name: Lint YAML + SQL
@@ -81,31 +57,26 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      # Restore cached manifest from previous run → enables partial parsing
-      # Use head_ref (branch name) for PRs, ref_name for pushes
+      # Restore AFTER deps so deps doesn't wipe target/
+      # No SHA in key — same branch always hits same cache entry
       - name: Restore dbt manifest cache
+        id: cache-restore
         uses: actions/cache/restore@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
-          restore-keys: |
-            dbt-manifest-${{ github.head_ref || github.ref_name }}-
-            dbt-manifest-main-
+          key: dbt-manifest-${{ github.head_ref }}
+          restore-keys: dbt-manifest-main
 
       - name: dbt build → DEV_${{ github.actor }}
         run: dbt build --target ci
 
-      # Save manifest after successful build for next run
+      # Always save — overwrites old cache with fresh manifest
       - name: Save dbt manifest cache
         if: success()
         uses: actions/cache/save@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
-
-  # ============================================================
-  # CD: on merge to main — deploy to PROD
-  # ============================================================
+          key: dbt-manifest-${{ github.head_ref }}-${{ github.run_id }}
 
   deploy-prod:
     if: github.event_name == 'push'
@@ -132,22 +103,19 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      # Restore manifest from main branch cache
       - name: Restore dbt manifest cache
         uses: actions/cache/restore@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-main-${{ github.sha }}
-          restore-keys: |
-            dbt-manifest-main-
+          key: dbt-manifest-main
+          restore-keys: dbt-manifest-main
 
       - name: dbt build → PROD
         run: dbt build --target prod
 
-      # Save manifest after prod deploy
       - name: Save dbt manifest cache
         if: success()
         uses: actions/cache/save@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-main-${{ github.sha }}
+          key: dbt-manifest-main-${{ github.run_id }}
