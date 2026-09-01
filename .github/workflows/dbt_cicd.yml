@@ -1,21 +1,19 @@
 # ============================================================
 # dbt CI/CD — Single Repo (WIF OIDC)
 #
-# Everything lives in THIS repo:
-#   .github/actions/setup-snowflake/  ← composite action
-#   .github/workflows/dbt_cicd.yml    ← this file
-#   profiles.yml                      ← dbt connection
-#   macros/generate_schema_name.sql   ← per-developer schema
-#
 # FLOW:
 #   PR to main:
 #     1. Lint (YAML + SQL)
 #     2. setup-snowflake → WIF token
-#     3. dbt build --target ci → DEV_<github_username>
+#     3. Restore manifest cache → partial parsing
+#     4. dbt build --target ci → DEV_<github_username>
+#     5. Save manifest cache
 #
 #   Merge to main:
 #     1. setup-snowflake → WIF token
-#     2. dbt build --target prod → PROD
+#     2. Restore manifest cache → partial parsing
+#     3. dbt build --target prod → PROD
+#     4. Save manifest cache
 #
 # SECRETS NEEDED (1 only):
 #   SNOWFLAKE_ACCOUNT = ixxaxho-kv48866
@@ -32,7 +30,7 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write      # required for OIDC token request
+  id-token: write
   contents: read
 
 jobs:
@@ -61,18 +59,18 @@ jobs:
     name: dbt build → DEV_${{ github.actor }}
     needs: [lint]
     runs-on: ubuntu-latest
-    environment: prod                          # matches WIF SUBJECT
+    environment: prod
     permissions:
       id-token: write
       contents: read
     env:
       DBT_PROFILES_DIR: .
-      GITHUB_ACTOR: ${{ github.actor }}        # → macro → DEV_USERNAME schema
+      GITHUB_ACTOR: ${{ github.actor }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Snowflake (WIF)
-        uses: ./.github/actions/setup-snowflake    # ← LOCAL action (same repo)
+        uses: ./.github/actions/setup-snowflake
         with:
           environment: ci
           snowflake-account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
@@ -83,8 +81,27 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
+      # Restore cached manifest from previous run → enables partial parsing
+      # Falls back to main branch cache if branch cache not found
+      - name: Restore dbt manifest cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/manifest.json
+          key: dbt-manifest-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            dbt-manifest-${{ github.ref_name }}-
+            dbt-manifest-main-
+
       - name: dbt build → DEV_${{ github.actor }}
         run: dbt build --target ci
+
+      # Save manifest after successful build for next run
+      - name: Save dbt manifest cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: target/manifest.json
+          key: dbt-manifest-${{ github.ref_name }}-${{ github.sha }}
 
   # ============================================================
   # CD: on merge to main — deploy to PROD
@@ -94,7 +111,7 @@ jobs:
     if: github.event_name == 'push'
     name: dbt build → PROD
     runs-on: ubuntu-latest
-    environment: prod                          # matches WIF SUBJECT
+    environment: prod
     permissions:
       id-token: write
       contents: read
@@ -104,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Snowflake (WIF)
-        uses: ./.github/actions/setup-snowflake    # ← LOCAL action (same repo)
+        uses: ./.github/actions/setup-snowflake
         with:
           environment: prod
           snowflake-account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
@@ -115,5 +132,22 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
+      # Restore manifest from main branch cache
+      - name: Restore dbt manifest cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/manifest.json
+          key: dbt-manifest-main-${{ github.sha }}
+          restore-keys: |
+            dbt-manifest-main-
+
       - name: dbt build → PROD
         run: dbt build --target prod
+
+      # Save manifest after prod deploy
+      - name: Save dbt manifest cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: target/manifest.json
+          key: dbt-manifest-main-${{ github.sha }}
