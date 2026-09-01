@@ -9,11 +9,3 @@ select
     signup_date,
     first_name || ' ' || last_name as full_name
 from {{ ref('customers') }}
--- WIF test
--- fix token
--- fix token
--- wif fix
--- wif fix
--- wif fix
--- test ci dev prod
--- test composite action setup-snowflake
