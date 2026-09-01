@@ -1,10 +1,9 @@
 -- customers_view: full customer list from seed
 select
-    id,
-    first_name,
-    last_name,
-    email,
-    city,
-    first_name || ' ' || last_name as full_name
+    ID,
+    FIRST_NAME,
+    LAST_NAME,
+    EMAIL,
+    CITY,
+    FIRST_NAME || ' ' || LAST_NAME as FULL_NAME
 from {{ ref('customers') }}
--- first test
