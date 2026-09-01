@@ -1,6 +1,14 @@
 # ============================================================
-# dbt CI/CD — Single Repo (WIF OIDC)
-# Uses --state flag for partial parsing with explicit path
+# dbt CI/CD — Single Repo (WIF OIDC) — SLIM CI
+#
+# SLIM CI: only builds CHANGED models on PR (not everything)
+#   --select state:modified+   = changed models + their downstream
+#   --defer                    = use prod manifest for unchanged models
+#   --state /tmp/prod-state    = compare against prod manifest
+#
+# FLOW:
+#   PR:    lint → download prod manifest → dbt build CHANGED only
+#   Merge: dbt build ALL → upload fresh manifest as artifact
 # ============================================================
 name: dbt CI/CD (WIF)
 
@@ -33,7 +41,7 @@ jobs:
 
   build-ci:
     if: github.event_name == 'pull_request'
-    name: dbt build → DEV_${{ github.actor }}
+    name: dbt build → DEV_${{ github.actor }} (changed only)
     needs: [lint]
     runs-on: ubuntu-latest
     environment: prod
@@ -58,44 +66,40 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      # Restore previous manifest into /tmp/dbt-state/ (separate from target/)
-      # so dbt deps/clean cannot wipe it
-      - name: Restore dbt state cache
-        uses: actions/cache/restore@v4
+      # Download prod manifest (uploaded by CD job after each prod deploy)
+      # This is the "state" to compare against
+      - name: Download prod manifest (state)
+        uses: actions/download-artifact@v4
         with:
-          path: /tmp/dbt-state/manifest.json
-          key: dbt-state-${{ github.head_ref }}
-          restore-keys: dbt-state-main
+          name: prod-manifest
+          path: /tmp/prod-state
+        continue-on-error: true    # first run ever = no artifact yet, that's ok
 
-      - name: Check state manifest
+      - name: Check prod state available
         run: |
-          if [ -f /tmp/dbt-state/manifest.json ]; then
-            echo "✅ state manifest found — partial parse enabled"
+          if [ -f /tmp/prod-state/manifest.json ]; then
+            echo "SLIM_CI=true" >> $GITHUB_ENV
+            echo "✅ Prod manifest found — Slim CI: only changed models will build"
           else
-            echo "⚠️ no state manifest — first run, full parse"
-            mkdir -p /tmp/dbt-state
+            echo "SLIM_CI=false" >> $GITHUB_ENV
+            echo "⚠️ No prod manifest yet — building all models (first run)"
           fi
 
-      - name: dbt build → DEV_${{ github.actor }}
+      # Slim CI: only build changed models + downstream
+      - name: dbt build → changed models only
         run: |
-          if [ -f /tmp/dbt-state/manifest.json ]; then
-            dbt build --target ci --state /tmp/dbt-state
+          if [ "$SLIM_CI" = "true" ]; then
+            dbt build --target ci \
+              --select state:modified+ \
+              --defer \
+              --state /tmp/prod-state
           else
             dbt build --target ci
           fi
 
-      # Copy fresh manifest to state folder for next run
-      - name: Save state for next run
-        if: success()
-        run: cp target/manifest.json /tmp/dbt-state/manifest.json
-
-      - name: Save dbt state cache
-        if: success()
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/dbt-state/manifest.json
-          key: dbt-state-${{ github.head_ref }}-${{ github.run_id }}
-
+  # ============================================================
+  # CD: full build to PROD + upload manifest as artifact
+  # ============================================================
   deploy-prod:
     if: github.event_name == 'push'
     name: dbt build → PROD
@@ -121,30 +125,14 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      - name: Restore dbt state cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/dbt-state/manifest.json
-          key: dbt-state-main
-          restore-keys: dbt-state-main
+      - name: dbt build → PROD (full build)
+        run: dbt build --target prod
 
-      - name: dbt build → PROD
-        run: |
-          if [ -f /tmp/dbt-state/manifest.json ]; then
-            dbt build --target prod --state /tmp/dbt-state
-          else
-            dbt build --target prod
-          fi
-
-      - name: Save state for next run
+      # Upload manifest so CI jobs can use it for Slim CI
+      - name: Upload prod manifest as artifact
         if: success()
-        run: |
-          mkdir -p /tmp/dbt-state
-          cp target/manifest.json /tmp/dbt-state/manifest.json
-
-      - name: Save dbt state cache
-        if: success()
-        uses: actions/cache/save@v4
+        uses: actions/upload-artifact@v4
         with:
-          path: /tmp/dbt-state/manifest.json
-          key: dbt-state-main-${{ github.run_id }}
+          name: prod-manifest
+          path: target/manifest.json
+          retention-days: 30        # keep for 30 days
