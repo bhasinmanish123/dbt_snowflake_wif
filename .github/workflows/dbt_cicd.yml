@@ -67,6 +67,15 @@ jobs:
           key: dbt-manifest-${{ github.head_ref }}
           restore-keys: dbt-manifest-main
 
+      - name: Check manifest exists
+        run: |
+          if [ -f target/manifest.json ]; then
+            echo "✅ manifest.json found — partial parse will run"
+            ls -lh target/manifest.json
+          else
+            echo "❌ manifest.json NOT found — full parse will run"
+          fi
+
       - name: dbt build → DEV_${{ github.actor }}
         run: dbt build --target ci
 
