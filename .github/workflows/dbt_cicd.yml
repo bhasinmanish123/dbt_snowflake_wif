@@ -1,5 +1,6 @@
 # ============================================================
 # dbt CI/CD — Single Repo (WIF OIDC)
+# Uses --state flag for partial parsing with explicit path
 # ============================================================
 name: dbt CI/CD (WIF)
 
@@ -57,26 +58,43 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      # Restore AFTER deps so deps doesn't wipe target/
-      # No SHA in key — same branch always hits same cache entry
-      - name: Restore dbt manifest cache
-        id: cache-restore
+      # Restore previous manifest into /tmp/dbt-state/ (separate from target/)
+      # so dbt deps/clean cannot wipe it
+      - name: Restore dbt state cache
         uses: actions/cache/restore@v4
         with:
-          path: target/manifest.json
-          key: dbt-manifest-${{ github.head_ref }}
-          restore-keys: dbt-manifest-main
+          path: /tmp/dbt-state/manifest.json
+          key: dbt-state-${{ github.head_ref }}
+          restore-keys: dbt-state-main
+
+      - name: Check state manifest
+        run: |
+          if [ -f /tmp/dbt-state/manifest.json ]; then
+            echo "✅ state manifest found — partial parse enabled"
+          else
+            echo "⚠️ no state manifest — first run, full parse"
+            mkdir -p /tmp/dbt-state
+          fi
 
       - name: dbt build → DEV_${{ github.actor }}
-        run: dbt build --target ci
+        run: |
+          if [ -f /tmp/dbt-state/manifest.json ]; then
+            dbt build --target ci --state /tmp/dbt-state
+          else
+            dbt build --target ci
+          fi
 
-      # Always save — overwrites old cache with fresh manifest
-      - name: Save dbt manifest cache
+      # Copy fresh manifest to state folder for next run
+      - name: Save state for next run
+        if: success()
+        run: cp target/manifest.json /tmp/dbt-state/manifest.json
+
+      - name: Save dbt state cache
         if: success()
         uses: actions/cache/save@v4
         with:
-          path: target/manifest.json
-          key: dbt-manifest-${{ github.head_ref }}-${{ github.run_id }}
+          path: /tmp/dbt-state/manifest.json
+          key: dbt-state-${{ github.head_ref }}-${{ github.run_id }}
 
   deploy-prod:
     if: github.event_name == 'push'
@@ -103,19 +121,30 @@ jobs:
       - name: dbt deps
         run: dbt deps || true
 
-      - name: Restore dbt manifest cache
+      - name: Restore dbt state cache
         uses: actions/cache/restore@v4
         with:
-          path: target/manifest.json
-          key: dbt-manifest-main
-          restore-keys: dbt-manifest-main
+          path: /tmp/dbt-state/manifest.json
+          key: dbt-state-main
+          restore-keys: dbt-state-main
 
       - name: dbt build → PROD
-        run: dbt build --target prod
+        run: |
+          if [ -f /tmp/dbt-state/manifest.json ]; then
+            dbt build --target prod --state /tmp/dbt-state
+          else
+            dbt build --target prod
+          fi
 
-      - name: Save dbt manifest cache
+      - name: Save state for next run
+        if: success()
+        run: |
+          mkdir -p /tmp/dbt-state
+          cp target/manifest.json /tmp/dbt-state/manifest.json
+
+      - name: Save dbt state cache
         if: success()
         uses: actions/cache/save@v4
         with:
-          path: target/manifest.json
-          key: dbt-manifest-main-${{ github.run_id }}
+          path: /tmp/dbt-state/manifest.json
+          key: dbt-state-main-${{ github.run_id }}
