@@ -1,14 +1,21 @@
 # ============================================================
-# dbt CI/CD — Single Repo (WIF OIDC) — SLIM CI
-#
-# SLIM CI: only builds CHANGED models on PR (not everything)
-#   --select state:modified+   = changed models + their downstream
-#   --defer                    = use prod manifest for unchanged models
-#   --state /tmp/prod-state    = compare against prod manifest
+# dbt CI/CD — Single Repo (WIF OIDC)
 #
 # FLOW:
-#   PR:    lint → download prod manifest → dbt build CHANGED only
-#   Merge: dbt build ALL → upload fresh manifest as artifact
+#   PR to main:
+#     1. Lint (YAML + SQL)
+#     2. setup-snowflake → WIF token
+#     3. dbt build --target ci → DEV_<github_username>
+#
+#   Merge to main:
+#     1. setup-snowflake → WIF token
+#     2. dbt build --target prod → PROD
+#
+# SECRETS NEEDED (1 only):
+#   SNOWFLAKE_ACCOUNT = ixxaxho-kv48866
+#
+# GITHUB ENVIRONMENT NEEDED:
+#   prod  (Settings → Environments → New: prod)
 # ============================================================
 name: dbt CI/CD (WIF)
 
@@ -41,7 +48,7 @@ jobs:
 
   build-ci:
     if: github.event_name == 'pull_request'
-    name: dbt build → DEV_${{ github.actor }} (changed only)
+    name: dbt build → DEV_${{ github.actor }}
     needs: [lint]
     runs-on: ubuntu-latest
     environment: prod
@@ -53,53 +60,18 @@ jobs:
       GITHUB_ACTOR: ${{ github.actor }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Setup Snowflake (WIF)
         uses: ./.github/actions/setup-snowflake
         with:
           environment: ci
           snowflake-account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-
       - name: Install dbt
         run: pip install dbt-snowflake
-
       - name: dbt deps
         run: dbt deps || true
+      - name: dbt build → DEV_${{ github.actor }}
+        run: dbt build --target ci
 
-      # Download prod manifest (uploaded by CD job after each prod deploy)
-      # This is the "state" to compare against
-      - name: Download prod manifest (state)
-        uses: actions/download-artifact@v4
-        with:
-          name: prod-manifest
-          path: /tmp/prod-state
-        continue-on-error: true    # first run ever = no artifact yet, that's ok
-
-      - name: Check prod state available
-        run: |
-          if [ -f /tmp/prod-state/manifest.json ]; then
-            echo "SLIM_CI=true" >> $GITHUB_ENV
-            echo "✅ Prod manifest found — Slim CI: only changed models will build"
-          else
-            echo "SLIM_CI=false" >> $GITHUB_ENV
-            echo "⚠️ No prod manifest yet — building all models (first run)"
-          fi
-
-      # Slim CI: only build changed models + downstream
-      - name: dbt build → changed models only
-        run: |
-          if [ "$SLIM_CI" = "true" ]; then
-            dbt build --target ci \
-              --select state:modified+ \
-              --defer \
-              --state /tmp/prod-state
-          else
-            dbt build --target ci
-          fi
-
-  # ============================================================
-  # CD: full build to PROD + upload manifest as artifact
-  # ============================================================
   deploy-prod:
     if: github.event_name == 'push'
     name: dbt build → PROD
@@ -112,27 +84,14 @@ jobs:
       DBT_PROFILES_DIR: .
     steps:
       - uses: actions/checkout@v4
-
       - name: Setup Snowflake (WIF)
         uses: ./.github/actions/setup-snowflake
         with:
           environment: prod
           snowflake-account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-
       - name: Install dbt
         run: pip install dbt-snowflake
-
       - name: dbt deps
         run: dbt deps || true
-
-      - name: dbt build → PROD (full build)
+      - name: dbt build → PROD
         run: dbt build --target prod
-
-      # Upload manifest so CI jobs can use it for Slim CI
-      - name: Upload prod manifest as artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: prod-manifest
-          path: target/manifest.json
-          retention-days: 30        # keep for 30 days
