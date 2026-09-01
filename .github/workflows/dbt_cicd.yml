@@ -82,14 +82,14 @@ jobs:
         run: dbt deps || true
 
       # Restore cached manifest from previous run → enables partial parsing
-      # Falls back to main branch cache if branch cache not found
+      # Use head_ref (branch name) for PRs, ref_name for pushes
       - name: Restore dbt manifest cache
         uses: actions/cache/restore@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-${{ github.ref_name }}-${{ github.sha }}
+          key: dbt-manifest-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            dbt-manifest-${{ github.ref_name }}-
+            dbt-manifest-${{ github.head_ref || github.ref_name }}-
             dbt-manifest-main-
 
       - name: dbt build → DEV_${{ github.actor }}
@@ -101,7 +101,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: target/manifest.json
-          key: dbt-manifest-${{ github.ref_name }}-${{ github.sha }}
+          key: dbt-manifest-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
 
   # ============================================================
   # CD: on merge to main — deploy to PROD
